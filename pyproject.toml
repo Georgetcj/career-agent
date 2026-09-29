@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "career-agent"
+version = "0.1.0"
+description = "A trustworthy job-search assistant for technical candidates."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.20,<2",
+    "fastapi[standard]>=0.141,<1",
+    "minio>=7.2,<8",
+    "openai>=2.29,<3",
+    "pgvector>=0.4,<1",
+    "psycopg[binary]>=3.3,<4",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.15,<3",
+    "python-multipart>=0.0.20,<1",
+    "pypdf>=6.0,<7",
+    "python-docx>=1.2,<2",
+    "redis>=8.1,<9",
+    "sqlalchemy>=2.0,<2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyright>=1.1,<2",
+    "pytest>=9.1,<10",
+    "ruff>=0.16,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/career_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires the local PostgreSQL service started by Docker Compose",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+    "tools/create_phase_one_summary.py",
+    "tools/create_phase_two_summary.py",
+    "tools/create_phase_three_summary.py",
+    "tools/create_phase_four_summary.py",
+]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["src", "tests"]
