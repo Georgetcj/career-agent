@@ -8,28 +8,33 @@ Career Agent 是一个面向技术类求职场景的可信智能求职系统。�
 
 ```mermaid
 flowchart TB
-    User[求职用户] --> API[FastAPI API]
+    User["求职用户"] --> API["FastAPI API"]
 
-    subgraph Application[Career Agent 应用]
-        API --> Candidate[用户与简历管理]
-        API --> Knowledge[简历解析与知识检索]
-        API --> Matching[JD 解析与岗位匹配]
-        API --> Tailoring[用户确认的简历定制]
-        Candidate --> DB
-        Candidate --> Storage
-        Knowledge --> DB
-        Knowledge --> Storage
-        Knowledge --> Embedding[OpenAI 兼容 Embedding 服务]
-        Matching --> DB
-        Tailoring --> DB
-        API -. 后续缓存与任务状态 .-> Cache
+    subgraph Application["Career Agent 应用"]
+        Candidate["用户与简历管理"]
+        Knowledge["简历解析与知识检索"]
+        Matching["JD 解析与岗位匹配"]
+        Tailoring["用户确认的简历定制"]
     end
 
-    subgraph LocalServices[本地基础服务]
-        DB[(PostgreSQL + pgvector)]
-        Cache[(Redis)]
-        Storage[(MinIO)]
+    subgraph LocalServices["本地基础服务"]
+        DB[("PostgreSQL + pgvector")]
+        Cache[("Redis")]
+        Storage[("MinIO")]
     end
+
+    API --> Candidate
+    API --> Knowledge
+    API --> Matching
+    API --> Tailoring
+    API --> Cache
+    Candidate --> DB
+    Candidate --> Storage
+    Knowledge --> DB
+    Knowledge --> Storage
+    Knowledge --> Embedding["OpenAI 兼容 Embedding 服务"]
+    Matching --> DB
+    Tailoring --> DB
 ```
 
 | 组件 | 主要职责 |
