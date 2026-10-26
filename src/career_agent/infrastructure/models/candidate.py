@@ -51,6 +51,7 @@ class User(TimestampedModel, Base):
     resumes: Mapped[list[Resume]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    jobs: Mapped[list[Job]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class CandidateProfile(TimestampedModel, Base):
@@ -186,3 +187,196 @@ class DocumentChunk(TimestampedModel, Base):
     embedding_dimensions: Mapped[int | None] = mapped_column(Integer)
 
     resume_version: Mapped[ResumeVersion] = relationship(back_populates="chunks")
+
+
+class Job(TimestampedModel, Base):
+    """A job posting pasted by one user; no third-party job-board scraping is implied."""
+
+    __tablename__ = "jobs"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    company_name: Mapped[str | None] = mapped_column(String(200))
+    city: Mapped[str | None] = mapped_column(String(100))
+    source_url: Mapped[str | None] = mapped_column(String(1000))
+    raw_description: Mapped[str] = mapped_column(Text, nullable=False)
+    parse_status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    parse_error: Mapped[str | None] = mapped_column(Text)
+    parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="jobs")
+    description: Mapped[JobDescription | None] = relationship(
+        back_populates="job", cascade="all, delete-orphan", uselist=False
+    )
+    analyses: Mapped[list[MatchAnalysis]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+    @property
+    def requirements(self) -> list[JDRequirement]:
+        """Expose parsed requirements at the API boundary without duplicating their ownership."""
+
+        return self.description.requirements if self.description is not None else []
+
+
+class JobDescription(TimestampedModel, Base):
+    """A parsed, versioned representation of a single pasted job description."""
+
+    __tablename__ = "job_descriptions"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    parser_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+    job: Mapped[Job] = relationship(back_populates="description")
+    requirements: Mapped[list[JDRequirement]] = relationship(
+        back_populates="job_description", cascade="all, delete-orphan"
+    )
+
+
+class JDRequirement(TimestampedModel, Base):
+    """One requirement extracted deterministically from a job description."""
+
+    __tablename__ = "jd_requirements"
+    __table_args__ = (
+        UniqueConstraint(
+            "job_description_id", "ordinal", name="uq_jd_requirements_description_order"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    job_description_id: Mapped[UUID] = mapped_column(
+        ForeignKey("job_descriptions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    requirement_text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str | None] = mapped_column(String(100))
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    job_description: Mapped[JobDescription] = relationship(back_populates="requirements")
+
+
+class MatchAnalysis(TimestampedModel, Base):
+    """One reproducible rule-based comparison of a resume version to a job posting."""
+
+    __tablename__ = "match_analyses"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    resume_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    strategy_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="completed", nullable=False)
+    overall_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    required_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    bonus_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+
+    job: Mapped[Job] = relationship(back_populates="analyses")
+    evidences: Mapped[list[MatchEvidence]] = relationship(
+        back_populates="analysis", cascade="all, delete-orphan"
+    )
+    gaps: Mapped[list[MatchGap]] = relationship(
+        back_populates="analysis", cascade="all, delete-orphan"
+    )
+
+
+class MatchEvidence(TimestampedModel, Base):
+    """A snapshot of the resume chunk that supports one matched requirement."""
+
+    __tablename__ = "match_evidence"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    match_analysis_id: Mapped[UUID] = mapped_column(
+        ForeignKey("match_analyses.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    jd_requirement_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("jd_requirements.id", ondelete="SET NULL"), nullable=True
+    )
+    document_chunk_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(30), default="matched", nullable=False)
+    evidence_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    analysis: Mapped[MatchAnalysis] = relationship(back_populates="evidences")
+
+
+class MatchGap(TimestampedModel, Base):
+    """A requirement with no explicit supporting text in the selected resume."""
+
+    __tablename__ = "match_gaps"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    match_analysis_id: Mapped[UUID] = mapped_column(
+        ForeignKey("match_analyses.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    jd_requirement_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("jd_requirements.id", ondelete="SET NULL"), nullable=True
+    )
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    severity: Mapped[str] = mapped_column(String(30), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+
+    analysis: Mapped[MatchAnalysis] = relationship(back_populates="gaps")
+
+
+class ResumeTailoringTask(TimestampedModel, Base):
+    """A user-controlled tailoring workflow based on one saved match analysis."""
+
+    __tablename__ = "resume_tailoring_tasks"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    match_analysis_id: Mapped[UUID] = mapped_column(
+        ForeignKey("match_analyses.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    source_resume_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    finalized_resume_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("resume_versions.id", ondelete="SET NULL"), unique=True
+    )
+    status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+
+    suggestions: Mapped[list[ResumeTailoringSuggestion]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )
+
+
+class ResumeTailoringSuggestion(TimestampedModel, Base):
+    """A safe prompt for user-confirmed resume text; it never asserts an unverified fact."""
+
+    __tablename__ = "resume_tailoring_suggestions"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    task_id: Mapped[UUID] = mapped_column(
+        ForeignKey("resume_tailoring_tasks.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    match_gap_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("match_gaps.id", ondelete="SET NULL"), nullable=True
+    )
+    suggestion_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    confirmed_text: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    task: Mapped[ResumeTailoringTask] = relationship(back_populates="suggestions")

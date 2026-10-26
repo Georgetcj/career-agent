@@ -12,7 +12,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from career_agent.core.config import get_settings
-from career_agent.infrastructure.document_parser import DocumentParsingError, ResumeDocumentParser
+from career_agent.infrastructure.document_parser import (
+    DocumentParsingError,
+    ParsedDocument,
+    ResumeDocumentParser,
+)
 from career_agent.infrastructure.embeddings import EmbeddingError, OpenAICompatibleEmbeddingClient
 from career_agent.infrastructure.models import DocumentChunk, Resume, ResumeVersion
 from career_agent.infrastructure.object_storage import MinioObjectStorage, ObjectStorageError
@@ -84,8 +88,12 @@ class ResumeIndexingService:
         )
         if version is None:
             raise ResumeIndexingError("Resume version was not found.")
-        if version.source is None:
-            raise ResumeIndexingError("Resume version has no uploaded source file.")
+        if version.source is None and not (
+            version.content_text and version.source_format in {"text", "markdown"}
+        ):
+            raise ResumeIndexingError(
+                "Resume version has no uploaded source file or confirmed text."
+            )
 
         version.parse_status = "parsing"
         version.index_status = "pending"
@@ -94,8 +102,11 @@ class ResumeIndexingService:
         session.commit()
 
         try:
-            source_bytes = MinioObjectStorage().get_object_bytes(version.source.object_key)
-            parsed = ResumeDocumentParser().parse(version.source_format, source_bytes)
+            if version.source is None:
+                parsed = ParsedDocument(content=version.content_text or "", page_count=None)
+            else:
+                source_bytes = MinioObjectStorage().get_object_bytes(version.source.object_key)
+                parsed = ResumeDocumentParser().parse(version.source_format, source_bytes)
         except (ObjectStorageError, DocumentParsingError) as error:
             version.parse_status = "failed"
             version.parse_error = str(error)

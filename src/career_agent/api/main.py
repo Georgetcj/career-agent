@@ -7,7 +7,9 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
 from career_agent.api.routers.candidates import router as candidates_router
+from career_agent.api.routers.jobs import router as jobs_router
 from career_agent.api.routers.knowledge import router as knowledge_router
+from career_agent.api.routers.tailoring import router as tailoring_router
 from career_agent.infrastructure.database import check_database_connection
 
 app = FastAPI(
@@ -17,6 +19,8 @@ app = FastAPI(
 )
 app.include_router(candidates_router)
 app.include_router(knowledge_router)
+app.include_router(jobs_router)
+app.include_router(tailoring_router)
 
 
 class HealthResponse(BaseModel):

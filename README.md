@@ -1,8 +1,90 @@
 # Career Agent
 
-面向技术类秋招用户的可信智能求职系统。项目以用户确认的真实经历为事实来源，支持简历解析、JD 匹配、定制简历、项目深挖与模拟面试。
+Career Agent 是一个面向技术类求职场景的可信智能求职系统。它以用户确认的真实简历内容为唯一事实来源，帮助用户保存简历、解析文本、理解岗位要求、获得可追溯的匹配结论，并在用户确认后创建面向目标岗位的简历新版本。
 
-## 本地基础服务
+系统不会自动抓取招聘网站，也不会把模型或规则的推断直接写成用户经历。任何进入新简历版本的补充内容，都必须由用户亲自确认。
+
+## 总体架构
+
+```mermaid
+flowchart TB
+    User[求职用户] --> API[FastAPI API]
+
+    subgraph Application[Career Agent 应用]
+        API --> Candidate[用户与简历管理]
+        API --> Knowledge[简历解析与知识检索]
+        API --> Matching[JD 解析与岗位匹配]
+        API --> Tailoring[用户确认的简历定制]
+        Candidate --> DB
+        Candidate --> Storage
+        Knowledge --> DB
+        Knowledge --> Storage
+        Knowledge --> Embedding[OpenAI 兼容 Embedding 服务]
+        Matching --> DB
+        Tailoring --> DB
+        API -. 后续缓存与任务状态 .-> Cache
+    end
+
+    subgraph LocalServices[本地基础服务]
+        DB[(PostgreSQL + pgvector)]
+        Cache[(Redis)]
+        Storage[(MinIO)]
+    end
+```
+
+| 组件 | 主要职责 |
+| --- | --- |
+| FastAPI | 提供用户、简历、索引、岗位匹配和简历定制 API。 |
+| PostgreSQL + pgvector | 保存业务数据、简历版本、文本块、向量、岗位要求、匹配证据与确认记录。 |
+| Redis | 为后续缓存和短期任务状态保留的本地基础服务。 |
+| MinIO | 保存上传的 PDF / DOCX 简历原文件。 |
+| Embedding 服务 | 将用户显式索引的简历文本转换为向量，用于语义检索。 |
+
+## 核心流程
+
+### 简历上传与知识检索
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant API as FastAPI
+    participant M as MinIO
+    participant DB as PostgreSQL pgvector
+    participant E as Embedding 服务
+    U->>API: 上传 PDF 或 DOCX 简历
+    API->>M: 保存原文件
+    API->>DB: 保存简历、版本和来源元数据
+    U->>API: 显式请求索引
+    API->>M: 读取原文件
+    API->>API: 提取文本并分块
+    API->>E: 为文本块请求向量
+    API->>DB: 保存文本块、向量与来源信息
+    U->>API: 发起知识检索
+    API->>E: 为查询请求向量
+    API->>DB: 按用户范围执行 pgvector 检索
+    DB-->>U: 返回可追溯的简历来源片段
+```
+
+### 岗位匹配与简历定制
+
+```mermaid
+flowchart LR
+    JD[用户粘贴 JD] --> Parse[解析技术要求]
+    Parse --> Requirements[岗位要求]
+    Resume[已索引的当前简历] --> Evidence[按文本证据匹配]
+    Requirements --> Evidence
+    Evidence --> Analysis[匹配报告]
+    Analysis --> Gaps[能力缺口]
+    Gaps --> Suggestions[待确认定制建议]
+    Suggestions --> Decision{用户决定}
+    Decision -->|拒绝| Keep[保留原简历]
+    Decision -->|接受并填写确认文本| NewVersion[创建新的简历版本]
+    NewVersion --> Reindex[可选重新索引]
+```
+
+岗位匹配首版使用确定性规则。只有在用户简历文本中找到明确证据时，系统才会记录为“已匹配”；没有证据的要求会形成能力缺口。匹配得分仅反映当前简历文本的证据覆盖度，不是录用概率，也不能替代人工判断。
+
+## 本地启动
 
 本项目使用 Docker Compose 启动开发依赖：
 
@@ -14,54 +96,57 @@
 
 MinIO 使用 Quay 上的固定镜像摘要，以避免 Docker Hub 上该历史公开镜像的访问限制。
 
-首次使用时复制环境变量模板并填入本机开发密码：
+### 1. 准备环境变量
+
+首次使用时复制环境变量模板并填入本机开发密码。`.env` 包含密码和 API Key，不应提交到 Git：
 
 ```powershell
 Copy-Item .env.example .env
+```
+
+若需要使用语义索引与检索，请在 `.env` 中配置 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 与 `EMBEDDING_DIMENSIONS`。
+
+### 2. 启动 Docker 基础服务
+
+确保 Docker Desktop 已启动，然后在项目根目录执行：
+
+```powershell
 docker compose up -d
 docker compose ps
 ```
 
-首次启动完成后，可验证三项服务与 pgvector 扩展：
+可验证三项服务与 pgvector 扩展：
 
 ```powershell
 docker compose exec postgres psql -U career_agent -d career_agent -c "SELECT extname FROM pg_extension WHERE extname = 'vector';"
 docker compose exec redis redis-cli ping
-Invoke-WebRequest http://localhost:9000/minio/health/live
+Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:9000/minio/health/live"
 ```
 
 预期结果分别为 `vector`、`PONG` 与 HTTP `200`。
 
-停止服务：
+### 3. 激活 Python 环境并执行迁移
 
 ```powershell
-docker compose down
+conda activate career-agent
+cd G:\Catcher
+alembic upgrade head
+alembic current
 ```
 
-服务数据由 Docker Volumes 保存；`docker compose down` 不会删除数据。仅在明确需要清空本地开发数据时使用 `docker compose down -v`。
-
-## 初始目录
-
-```text
-src/career_agent/     Python 应用包
-tests/                自动化测试
-```
-
-## API 健康检查
-
-在激活 `career-agent` Conda 环境后启动 API：
+### 4. 启动 API
 
 ```powershell
 fastapi dev src/career_agent/api/main.py
 ```
 
-另开一个终端窗口，访问健康检查接口：
+在另一个终端验证服务：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-当 API 能连接 PostgreSQL 时，预期结果为：
+预期结果：
 
 ```text
 status database
@@ -69,63 +154,20 @@ status database
 ok     available
 ```
 
-## 第二阶段：核心数据模型与迁移
+交互式 API 文档：<http://127.0.0.1:8000/docs>
 
-项目已使用 Alembic 管理业务表的结构演进。首次迁移会创建 `users`、`candidate_profiles`、`preferences`、`resumes`、`resume_versions` 和 `resume_sources`。
+## 常用命令
 
 ```powershell
-alembic upgrade head
-alembic current
+# 运行自动化测试
+python -m pytest -q
+
+# 静态检查
+python -m ruff check .
+python -m pyright --pythonpath C:\Users\admin\miniconda\envs\career-agent\python.exe
+
+# 停止基础服务，保留 Docker 数据卷
+docker compose down
 ```
 
-当前最小 API 支持创建和读取用户、候选人画像、求职偏好、简历及简历版本元数据。启动 API 后可访问交互式文档：
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## 第三阶段：MinIO 简历文件存储
-
-简历原文件保存在 MinIO 的 `career-agent-files` Bucket 中；PostgreSQL 的 `resume_sources`
-只保存对象路径、原文件名、文件大小和 SHA-256 等元数据。上传接口只接受不超过 10 MB 的
-PDF 或 DOCX 文件：
-
-```text
-POST /users/{user_id}/resumes/upload
-```
-
-它使用 `multipart/form-data`，字段为 `file`、可选 `title` 与可选 `is_primary`。文件先写入
-MinIO，再以单个 PostgreSQL 事务创建简历、版本和来源记录；若写库失败，接口会删除刚上传的
-对象作为补偿。下载时使用以下接口，服务会先检查简历归属，再签发 5 分钟有效的 MinIO URL：
-
-```text
-GET /users/{user_id}/resume-versions/{resume_version_id}/download-url
-```
-
-启动 API 后可在 `http://127.0.0.1:8000/docs` 试用接口。配置项见 `.env.example`，包括
-`MINIO_BUCKET`、预签名 URL 的有效期与文件大小上限。
-
-## 第四阶段：简历解析与 RAG 基础
-
-对已经上传的 PDF/DOCX 简历，用户可显式触发解析与索引：原文件从 MinIO 读取，提取的原文保存到
-`resume_versions.content_text`，随后按段落分块、调用 Embedding 服务，并将向量与来源信息写入
-`document_chunks`。数据库使用 pgvector 的 HNSW 余弦索引加速检索；检索始终按 `user_id` 过滤，且仅返回
-当前简历版本的已索引文本块。
-
-在 `.env` 中配置 OpenAI 官方服务或 OpenAI 兼容服务。密钥绝不能提交到 Git：
-
-```dotenv
-EMBEDDING_PROVIDER=openai_compatible
-EMBEDDING_API_KEY=your-provider-key
-EMBEDDING_BASE_URL=https://your-provider.example/v1
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_DIMENSIONS=1536
-```
-
-安装新增依赖并执行迁移后，使用下面两个接口。索引接口会将简历文本发送给配置的 Embedding 服务，只有在
-用户明确调用它时才会产生外部 API 请求：
-
-```text
-POST /users/{user_id}/resume-versions/{resume_version_id}/index
-POST /users/{user_id}/knowledge/search
-```
+`docker compose down` 不会删除本地数据。只有在明确需要清空数据库、缓存和对象存储的本地开发数据时，才使用 `docker compose down -v`。

@@ -51,6 +51,8 @@ exclude = [
     "tools/create_phase_two_summary.py",
     "tools/create_phase_three_summary.py",
     "tools/create_phase_four_summary.py",
+    "tools/create_phase_five_summary.py",
+    "tools/create_phase_six_summary.py",
 ]
 
 [tool.pyright]
